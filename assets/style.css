@@ -1,0 +1,9 @@
+.center-container { 
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+}
+
+form input, form button {
+    margin: 10px 0;
+}
