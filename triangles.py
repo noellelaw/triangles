@@ -3,6 +3,8 @@
 # -------------
 from dash import Dash, html, dash_table, dcc
 from dash import callback, Output, Input, State
+import plotly.graph_objects as go
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import io
@@ -18,9 +20,55 @@ from utils.evaluator import SemanticSegmentationEvaluator
 #-----------------------------
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Initialize the app
-app = Dash(__name__, external_stylesheets=['/assets/style.css'])
+app = Dash(__name__, external_stylesheets=['/assets/style.css'], title="triangles")
 # Initialize an empty DataFrame to store the classes and category IDs
 df = pd.DataFrame(columns=["RGB", "Grayscale", "Class Name", "Category Name", "Category ID"])
+
+#-----------------------------
+# Create a heatmap figure for the confusion matrix
+#-----------------------------
+def create_confusion_matrix_figure_and_metrics(model_name, model_data):
+
+    # Create a table of IoU and Dice per class
+    table_columns = ["Class Name", "IoU", "Dice Coefficient"]
+    table_data = [
+        {
+            "Class Name": class_name,
+            "IoU": f"{IoU:.2f}",
+            "Dice Coefficient": f"{Dice:.2f}"
+        }
+        for class_name, IoU, Dice in zip(model_data['class_names'], model_data['IoU_per_class'], model_data['dice_per_class'])
+    ]
+
+    # Add average IoU and Dice
+    table_data.append({
+        "Class Name": "Average",
+        "IoU": f"{model_data['avg_IoU']:.2f}",
+        "Dice Coefficient": f"{model_data['avg_dice']:.2f}"
+    })
+
+    # Create the confusion matrix heatmap
+    conf_matrix_fig = go.Figure(data=go.Heatmap(
+        z=model_data['confusion_matrix'],
+        x=model_data['class_names'],
+        y=model_data['class_names'],
+        colorscale='Viridis'
+    ))
+    conf_matrix_fig.update_layout(
+        title='Confusion Matrix',
+        xaxis_title='Predicted Class',
+        yaxis_title='True Class'
+    )
+
+    # Create the dash table component
+    metrics_table = dash_table.DataTable(
+        columns=[{"name": col, "id": col} for col in table_columns],
+        data=table_data,
+        style_table={'overflowX': 'auto'},
+        style_cell={'textAlign': 'center'}
+    )
+
+    return metrics_table, dcc.Graph(figure=conf_matrix_fig)
 
 #------------------------------
 # App layout
@@ -35,27 +83,28 @@ app.layout = [
 
     html.B("File Upload", style={'fontSize':16}),
     dcc.Upload(
-    id='upload_prediction',
-    children=html.Div([
-        'Drag and Drop or ',
-        html.A('Select File'),
-        ', (*.zip)'
-    ]),
-    style={
-        'width': '98%',
-        'height': '60px',
-        'lineHeight': '60px',
-        'borderWidth': '1px',
-        'borderStyle': 'dashed',
-        'borderRadius': '5px',
-        'textAlign': 'center',
-        'margin': '10px'
-    },
-    accept=".zip",
-    multiple=False,
+        id='upload_prediction',
+        children=html.Div([
+            'Drag and Drop or ',
+            html.A('Select File'),
+            ', (*.zip)'
+        ]),
+        style={
+            'width': '98%',
+            'height': '60px',
+            'lineHeight': '60px',
+            'borderWidth': '1px',
+            'borderStyle': 'dashed',
+            'borderRadius': '5px',
+            'textAlign': 'center',
+            'margin': '10px'
+        },
+        accept=".zip",
+        multiple=False,
     ),
     html.Div(id='output_uploaded', style={'textAlign':'center','fontSize':16}), # Placeholder for dynamic content
     html.Div(id='folder_path', style={'display': 'none'}),  # Hold the hidden folder path for evaluator
+    # TODO: Allow them to name the experiment to create output files? Or just do exp={uploadfile}_{modelsubdir}?
     html.Div(html.B("Class and Category ID Input "), style={'fontSize':16,'marginBottom': '10px',}),# Option to upload a CSV or manually input form data
     dcc.Tabs(id="data-input-method", value='form', children=[
         dcc.Tab(label='Fill Out Form', value='form', children=[
@@ -143,8 +192,11 @@ app.layout = [
     # Button to run the evaluator
     html.Button('Run Evaluator', id='run-evaluator', n_clicks=0, style={'marginTop': '20px'}),
 
-    # Output evaluation result
-    html.Div(id='evaluation-output', style={'marginTop': '20px'})
+    # Output model eval result pretty but girl, so confusing
+    html.H3("Model Performance Metrics"),
+    dcc.Tabs(id='model-tabs', children=[], style={'display': 'none'}),  # Hidden until data is uploaded
+    html.Div(id='metrics-table'),
+    html.Div(id='confusion-matrix-graph')
 ]
 
 
@@ -244,7 +296,10 @@ def update_table(n_clicks, contents, current_data, label_type, r_value, g_value,
 # Callback to run the evaluator when the 'Run Evaluator' button is clicked
 #------------------------------
 @app.callback(
-    Output('evaluation-output', 'children'),
+    Output('model-tabs', 'children'),
+    Output('model-tabs', 'style'),
+    [Output('metrics-table', 'children'),
+     Output('confusion-matrix-graph', 'children')],
     Input('run-evaluator', 'n_clicks'),
     State('folder_path', 'children'),
     State('class-table', 'data'),
@@ -252,10 +307,18 @@ def update_table(n_clicks, contents, current_data, label_type, r_value, g_value,
 )
 def run_evaluator(n_clicks, folder_path, class_data, label_type):
     if n_clicks > 0 and folder_path:
+        # Set up tabs
+        tabs = []
+        # Set up class names 
+        class_names = None
+        if len(class_data) > 1 and class_data[0]['Class Name'] != '':
+            class_names = [row['Class Name'] for row in class_data if row['Class Name']]
         # Save df as file for future use
         pd.DataFrame(class_data).to_csv('output.csv', index=False)
         # Prepare the class data based on the label type
-        if label_type == 'rgb':
+        if len(class_data) < 1:
+            classes = None
+        elif label_type == 'rgb':
             # Convert RGB strings back to tuples
             classes = [ast.literal_eval(row['RGB']) for row in class_data if row['RGB']]
             mode = 'rgb'
@@ -265,16 +328,23 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
             mode = 'grayscale'
 
         # Initialize the evaluator with the folder path and class data
-        evaluator = SemanticSegmentationEvaluator(directory=folder_path, classes=classes, mode=mode)
+        evaluator = SemanticSegmentationEvaluator(directory=folder_path, classes=classes, class_names=class_names, mode=mode)
 
         # Run the evaluation
         results = evaluator.evaluate()
 
-        # Display the results
-        return f"Evaluation Complete! Results: {results}"
+        # For each model in the returned dictionary, generate a metrics table and confusion matrix
+        for model_name, model_data in results.items():
+            metrics_table, confmat_fig = create_confusion_matrix_figure_and_metrics(model_name, model_data)
+            tabs.append(dcc.Tab(label=model_name, value=model_name))
+        return tabs, {'display': 'block'}, metrics_table, confmat_fig 
+
     elif n_clicks > 0 and folder_path is None:
-        return "Please upload required files first."
-    return ""
+        # Return an empty figure if no button has been clicked
+        # Cue pussycat dolls
+        return [], {'display': 'none'}, None, None
+
+    return [], {'display': 'none'}, None, None
 
 #------------------------------
 # Run app

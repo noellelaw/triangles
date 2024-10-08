@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 
 class SemanticSegmentationEvaluator:
-    def __init__(self, directory, classes=None, void_color=(0, 0, 0), mode='rgb'):
+    def __init__(self, directory, classes=None, class_names=None, void_color=(0, 0, 0), mode='rgb'):
         """
         Initializes the evaluator with the directory containing subfolders for predictions and ground_truth.
         
@@ -42,7 +42,8 @@ class SemanticSegmentationEvaluator:
         self.directory = directory
         self.gt_dir = os.path.join(directory, 'ground_truth')
         self.void_color = void_color
-        self.classes = classes # Will be determined from ground truth images
+        self.classes = classes # Will be determined from ground truth images if None
+        self.class_names = class_names # Will be determined from ground truth images if None
         self.class_dict = None  # Maps RGB to class index
         if self.classes is not None: 
             self.class_dict = {color: idx for idx, color in enumerate(self.classes)}
@@ -131,6 +132,40 @@ class SemanticSegmentationEvaluator:
         pred_class = self._rgb_to_class(pred_img_np)
 
         return pred_class, gt_class
+    
+    # TODO: Update to calc per category IIF categories are present
+    def _calculate_iou_dice(self, conf_matrix):
+        """
+        Calculate IoU and Dice coefficient for each class given a confusion matrix.
+        
+        :param conf_matrix: Confusion matrix
+        :return: IoU and Dice coefficient per class, average IoU, and average Dice
+        """
+        IoU_per_class = []
+        dice_per_class = []
+        
+        # For each class, calculate IoU and Dice
+        for i in range(len(conf_matrix)):
+            TP = conf_matrix[i, i]  # True Positives for class i
+            FP = conf_matrix[:, i].sum() - TP  # False Positives for class i
+            FN = conf_matrix[i, :].sum() - TP  # False Negatives for class i
+            
+            denominator = TP + FP + FN
+            
+            # IoU
+            IoU = TP / denominator if denominator > 0 else 0
+            IoU_per_class.append(IoU)
+            
+            # Dice coefficient
+            Dice = (2 * TP) / (2 * TP + FP + FN) if (2 * TP + FP + FN) > 0 else 0
+            dice_per_class.append(Dice)
+        
+        # Calculate average IoU and Dice coefficient
+        avg_IoU = np.mean(IoU_per_class)
+        avg_dice = np.mean(dice_per_class)
+        
+        return IoU_per_class, dice_per_class, avg_IoU, avg_dice
+
 
     def evaluate(self):
         """
@@ -144,6 +179,7 @@ class SemanticSegmentationEvaluator:
         # Step 1: Extract the unique classes from the ground truth images
         if self.classes == None:
             self._extract_unique_classes_from_gt()
+            self.class_names = [f'C{x}' for x in range(self.classes)]
 
         # Step 2: Add the void class to the list of classes for RGB mode
         if self.mode == 'rgb':
@@ -170,7 +206,6 @@ class SemanticSegmentationEvaluator:
 
             # Process images for the current prediction folder with progress bar
             for filename in tqdm(filenames, desc=f"Processing images for {pred_folder}"):
-                print(f'{filename}')
                 pred_class, gt_class = self._load_images(filename, filename, pred_dir)
                 all_preds.append(pred_class.flatten())
                 all_gts.append(gt_class.flatten())
@@ -183,10 +218,18 @@ class SemanticSegmentationEvaluator:
             conf_matrix = confusion_matrix(all_gts, all_preds, labels=range(len(self.classes)))
             accuracy = accuracy_score(all_gts, all_preds)
 
+            # Calculate IoU and Dice coefficient per class and overall
+            IoU_per_class, dice_per_class, avg_IoU, avg_dice = self._calculate_iou_dice(conf_matrix)
+
             # Store the results for this prediction folder
             all_model_results[pred_folder] = {
                 'confusion_matrix': conf_matrix,
-                'accuracy': accuracy
+                'accuracy': accuracy,
+                'IoU_per_class': IoU_per_class,
+                'dice_per_class': dice_per_class,
+                'avg_IoU': avg_IoU,
+                'avg_dice': avg_dice,
+                'class_names': self.class_names
             }
 
         return all_model_results
