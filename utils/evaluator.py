@@ -54,9 +54,13 @@ class SemanticSegmentationEvaluator:
         Extract unique classes from ground truth images only, whether they are in RGB or grayscale.
         """
         unique_classes = set()
+            
+        # Valid image file extensions
+        valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff')
 
-        # Vectorized way of finding unique colors/classes in ground truth images
-        filenames = os.listdir(self.gt_dir)
+        # Get a list of image files in the directory
+        filenames = [f for f in os.listdir(self.gt_dir) if f.lower().endswith(valid_extensions)]
+
         for filename in tqdm(filenames, desc="Extracting classes from ground truth"):
             image = Image.open(os.path.join(self.gt_dir, filename))
 
@@ -74,6 +78,7 @@ class SemanticSegmentationEvaluator:
 
         # Convert set to sorted list and create a dictionary for fast lookup (for RGB mode)
         self.classes = sorted(list(unique_classes))
+        self.classes  = [(int(r), int(g), int(b)) for (r, g, b) in self.classes]
         if self.mode == 'rgb':
             self.class_dict = {color: idx for idx, color in enumerate(self.classes)}
         print(f"Discovered classes from ground truth: {self.classes}")
@@ -177,14 +182,15 @@ class SemanticSegmentationEvaluator:
         all_model_results = {}
 
         # Step 1: Extract the unique classes from the ground truth images
-        if self.classes == None:
+        if self.classes is None or len(self.classes) < 1:
             self._extract_unique_classes_from_gt()
-            self.class_names = [f'C{x}' for x in range(self.classes)]
+            self.class_names = [f'C{x}' for x in range(len(self.classes))]
 
         # Step 2: Add the void class to the list of classes for RGB mode
         if self.mode == 'rgb':
-            self.classes.append(self.void_color)
-            self.class_dict[self.void_color] = len(self.classes) - 1  # Add void class to dictionary
+            if self.void_color not in self.classes:
+                self.classes.append(self.void_color)
+                self.class_dict[self.void_color] = len(self.classes) - 1  # Add void class to dictionary
         print(f"Final classes including void: {self.classes}")
 
         # Step 3: Identify all prediction folders (excluding 'ground_truth')
@@ -216,6 +222,7 @@ class SemanticSegmentationEvaluator:
 
             # Compute the confusion matrix and accuracy for the current prediction folder
             conf_matrix = confusion_matrix(all_gts, all_preds, labels=range(len(self.classes)))
+            #print(conf_matrix)
             accuracy = accuracy_score(all_gts, all_preds)
 
             # Calculate IoU and Dice coefficient per class and overall

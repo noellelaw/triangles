@@ -57,7 +57,7 @@ def create_confusion_matrix_figure_and_metrics(model_name, model_data):
     conf_matrix_fig.update_layout(
         title='Confusion Matrix',
         xaxis_title='Predicted Class',
-        yaxis_title='True Class'
+        yaxis_title='True Class',
     )
 
     # Create the dash table component
@@ -68,7 +68,7 @@ def create_confusion_matrix_figure_and_metrics(model_name, model_data):
         style_cell={'textAlign': 'center'}
     )
 
-    return metrics_table, dcc.Graph(figure=conf_matrix_fig)
+    return metrics_table, dcc.Graph(figure=conf_matrix_fig, style={'width': '65%'})
 
 #------------------------------
 # App layout
@@ -169,7 +169,7 @@ app.layout = [
                 ]),
                 style={
                     'width': '100%', 'height': '60px', 'lineHeight': '60px', 'borderWidth': '1px',
-                    'borderStyle': 'dashed', 'borderRadius': '5px', 'textAlign': 'center', 'marginBottom': '20px'
+                    'borderStyle': 'dashed', 'borderRadius': '5px', 'textAlign': 'center', 'marginBottom': '20px',
                 },
             )
         ]),
@@ -194,9 +194,12 @@ app.layout = [
 
     # Output model eval result pretty but girl, so confusing
     html.H3("Model Performance Metrics"),
+    html.Div(id='tabs-container'),
     dcc.Tabs(id='model-tabs', children=[], style={'display': 'none'}),  # Hidden until data is uploaded
-    html.Div(id='metrics-table'),
-    html.Div(id='confusion-matrix-graph')
+    html.Div(
+        id='side-by-side-container', 
+        style={'display': 'flex', 'justifyContent': 'space-between'}  # Container for side-by-side layout
+    )
 ]
 
 
@@ -251,7 +254,8 @@ def toggle_input_fields(label_type):
 #------------------------------
 @app.callback(
     Output('class-table', 'data'),
-    [Input('submit-button', 'n_clicks'), Input('upload-data', 'contents')],
+    [Input('submit-button', 'n_clicks'), 
+    Input('upload-data', 'contents')],
     [State('class-table', 'data'),
      State('label-type-dropdown', 'value'),
      State('input-r', 'value'),
@@ -263,7 +267,11 @@ def toggle_input_fields(label_type):
      State('input-category-id', 'value'),
      State('upload-data', 'filename')]
 )
-def update_table(n_clicks, contents, current_data, label_type, r_value, g_value, b_value, grayscale_value, class_name, category_name, category_id, filename):
+def update_table(
+    n_clicks, contents, current_data, label_type, 
+    r_value, g_value, b_value, grayscale_value, 
+    class_name, category_name, category_id, filename
+):
     # If file uploaded, parse it
     if contents is not None:
         content_type, content_string = contents.split(',')
@@ -298,8 +306,7 @@ def update_table(n_clicks, contents, current_data, label_type, r_value, g_value,
 @app.callback(
     Output('model-tabs', 'children'),
     Output('model-tabs', 'style'),
-    [Output('metrics-table', 'children'),
-     Output('confusion-matrix-graph', 'children')],
+    Output('side-by-side-container', 'children'),
     Input('run-evaluator', 'n_clicks'),
     State('folder_path', 'children'),
     State('class-table', 'data'),
@@ -316,9 +323,8 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         # Save df as file for future use
         pd.DataFrame(class_data).to_csv('output.csv', index=False)
         # Prepare the class data based on the label type
-        if len(class_data) < 1:
-            classes = None
-        elif label_type == 'rgb':
+        classes = None
+        if label_type == 'rgb':
             # Convert RGB strings back to tuples
             classes = [ast.literal_eval(row['RGB']) for row in class_data if row['RGB']]
             mode = 'rgb'
@@ -326,7 +332,6 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
             # Use grayscale values directly
             classes = [row['Grayscale'] for row in class_data if row['Grayscale']]
             mode = 'grayscale'
-
         # Initialize the evaluator with the folder path and class data
         evaluator = SemanticSegmentationEvaluator(directory=folder_path, classes=classes, class_names=class_names, mode=mode)
 
@@ -337,14 +342,16 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         for model_name, model_data in results.items():
             metrics_table, confmat_fig = create_confusion_matrix_figure_and_metrics(model_name, model_data)
             tabs.append(dcc.Tab(label=model_name, value=model_name))
-        return tabs, {'display': 'block'}, metrics_table, confmat_fig 
+        # Return tabs, display style, and metrics table+conf mat in a side by side format
+        return tabs, {'display': 'block'}, [metrics_table, confmat_fig]  
+    
 
     elif n_clicks > 0 and folder_path is None:
         # Return an empty figure if no button has been clicked
         # Cue pussycat dolls
-        return [], {'display': 'none'}, None, None
+        return [], {'display': 'none'}, None
 
-    return [], {'display': 'none'}, None, None
+    return [], {'display': 'none'}, None
 
 #------------------------------
 # Run app
