@@ -230,7 +230,7 @@ class SemanticSegmentationEvaluator:
 
             # Store the results for this prediction folder
             all_model_results[pred_folder] = {
-                'confusion_matrix': conf_matrix,
+                'confusion_matrix': conf_matrix.tolist(),
                 'accuracy': accuracy,
                 'IoU_per_class': IoU_per_class,
                 'dice_per_class': dice_per_class,
@@ -238,7 +238,6 @@ class SemanticSegmentationEvaluator:
                 'avg_dice': avg_dice,
                 'class_names': self.class_names
             }
-
         return all_model_results
 
 # Example usage:

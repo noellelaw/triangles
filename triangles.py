@@ -7,14 +7,18 @@ import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import io
 import os
 import ast
 import base64
 from zipfile import ZipFile
+import json 
 
 from utils.evaluator import SemanticSegmentationEvaluator
-
+from utils.general import create_output_folders
+#TODO: Allow column to be editted / deleted from table
+#    : please allow experiment name to save csv to to prevent overwriting of classes when ur being lazy and running wo jfc noelle
 #-----------------------------
 # Globals
 #-----------------------------
@@ -320,8 +324,8 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         class_names = None
         if len(class_data) > 1 and class_data[0]['Class Name'] != '':
             class_names = [row['Class Name'] for row in class_data if row['Class Name']]
-        # Save df as file for future use
-        pd.DataFrame(class_data).to_csv('output.csv', index=False)
+        # Set up output dirs and save class data
+        output_folder = create_output_folders(ROOT_DIR, folder_path, class_data)
         # Prepare the class data based on the label type
         classes = None
         if label_type == 'rgb':
@@ -342,6 +346,10 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         for model_name, model_data in results.items():
             metrics_table, confmat_fig = create_confusion_matrix_figure_and_metrics(model_name, model_data)
             tabs.append(dcc.Tab(label=model_name, value=model_name))
+        # Save plotly figure and data
+        pio.write_html(confmat_fig, file=os.path.join(output_folder,'visualizations','confmat.html'))
+        with open(os.path.join(output_folder,'metrics','metrics.json'), 'w') as json_file:
+            json.dump(results, json_file, indent=4)
         # Return tabs, display style, and metrics table+conf mat in a side by side format
         return tabs, {'display': 'block'}, [metrics_table, confmat_fig]  
     
