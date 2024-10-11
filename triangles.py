@@ -56,7 +56,7 @@ def create_confusion_matrix_figure_and_metrics(model_name, model_data):
         z=model_data['confusion_matrix'],
         x=model_data['class_names'],
         y=model_data['class_names'],
-        colorscale='Viridis'
+        colorscale='electric'
     ))
     conf_matrix_fig.update_layout(
         title='Confusion Matrix',
@@ -69,7 +69,7 @@ def create_confusion_matrix_figure_and_metrics(model_name, model_data):
         columns=[{"name": col, "id": col} for col in table_columns],
         data=table_data,
         style_table={'overflowX': 'auto'},
-        style_cell={'textAlign': 'center'}
+        style_cell={'textAlign': 'center'},
     )
 
     return metrics_table, dcc.Graph(figure=conf_matrix_fig, style={'width': '65%'})
@@ -79,10 +79,12 @@ def create_confusion_matrix_figure_and_metrics(model_name, model_data):
 #------------------------------
 app.layout = [
     html.Div(className='row', children='TRIANGLES', style={'textAlign':'center','fontSize':30}),
+    html.Div(className='row', children='A Semantic Segmentation Suite', style={'textAlign':'center','fontSize':24}),
     html.Hr(),
     html.B(className='row', children='Directions:', style={'textAlign':'left','fontSize':16}),
     html.Div(className='row', children='1. Upload a zip file containing the following subdirectories: (1) ground_truth and (2) 1+ model prediction output folders, in which each model output has its own subdirectory and the prediction image name maps to a corresponding ground truth image.', style={'textAlign':'left','fontSize':16}),
-    html.Div(className='row', children='2. (Optional) Define classes and categories. If you do not input these, classes will automatically be determined for you and plots that rely on catrgories cannot be created :broken-heart:.', style={'textAlign':'left','fontSize':16}),
+    html.Div(className='row', children='2. (Optional) Define classes and categories. If you do not input these, classes will automatically be determined for you and plots that rely on catrgories cannot be created :broken-heart:. If you include the void class 0 (grayscale) or (0,0,0) RGB, it must be the first label input.', style={'textAlign':'left','fontSize':16}),
+    html.Div(className='row', children='3. Select the Run Evaluator button to visualize your results! This will take longer if step 2 was not taken. All metrics and plotly graphs will be saved to {ROOT_DIR}/{ZIP_FILE}/.', style={'textAlign':'left','fontSize':16}),
     html.Hr(),
 
     html.B("File Upload", style={'fontSize':16}),
@@ -183,11 +185,11 @@ app.layout = [
     dash_table.DataTable(
         id='class-table',
         columns=[
-            {"name": "RGB", "id": "RGB"},
-            {"name": "Grayscale", "id": "Grayscale"},
-            {"name": "Class Name", "id": "Class Name"},
-            {"name": "Category Name", "id": "Category Name"},
-            {"name": "Category ID", "id": "Category ID"},
+            {"name": "RGB", "id": "RGB", "editable": True},
+            {"name": "Grayscale", "id": "Grayscale", "editable": True},
+            {"name": "Class Name", "id": "Class Name", "editable": True},
+            {"name": "Category Name", "id": "Category Name", "editable": True},
+            {"name": "Category ID", "id": "Category ID", "editable": True},
         ],
         data=df.to_dict('records'),  # Empty initially
         style_table={'marginTop': '20px'}
@@ -196,13 +198,20 @@ app.layout = [
     # Button to run the evaluator
     html.Button('Run Evaluator', id='run-evaluator', n_clicks=0, style={'marginTop': '20px'}),
 
-    # Output model eval result pretty but girl, so confusing
-    html.H3("Model Performance Metrics"),
-    html.Div(id='tabs-container'),
-    dcc.Tabs(id='model-tabs', children=[], style={'display': 'none'}),  # Hidden until data is uploaded
-    html.Div(
-        id='side-by-side-container', 
-        style={'display': 'flex', 'justifyContent': 'space-between'}  # Container for side-by-side layout
+     # Wrap the output in a loading spinner
+    dcc.Loading(
+        id="loading-spinner",
+        type="circle",  # You can also use 'default' or 'cube'
+        children = [
+            html.H3("Model Performance Metrics", id='metrics-title',  style={'display': 'none'}),  # Hidden until data is uploaded
+            # Output model eval result pretty but girl, so confusing
+            html.Div(id='tabs-container'),
+            dcc.Tabs(id='model-tabs', children=[], style={'display': 'none'}),  # Hidden until data is uploaded
+            html.Div(
+                id='side-by-side-container', 
+                style={'display': 'flex', 'justifyContent': 'space-between'}  # Container for side-by-side layout
+            )
+        ]
     )
 ]
 
@@ -308,9 +317,12 @@ def update_table(
 # Callback to run the evaluator when the 'Run Evaluator' button is clicked
 #------------------------------
 @app.callback(
-    Output('model-tabs', 'children'),
-    Output('model-tabs', 'style'),
-    Output('side-by-side-container', 'children'),
+    [
+        Output('metrics-title', 'style'),
+        Output('model-tabs', 'children'),
+        Output('model-tabs', 'style'),
+        Output('side-by-side-container', 'children')
+    ],
     Input('run-evaluator', 'n_clicks'),
     State('folder_path', 'children'),
     State('class-table', 'data'),
@@ -320,22 +332,31 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
     if n_clicks > 0 and folder_path:
         # Set up tabs
         tabs = []
-        # Set up class names 
-        class_names = None
-        if len(class_data) > 1 and class_data[0]['Class Name'] != '':
-            class_names = [row['Class Name'] for row in class_data if row['Class Name']]
         # Set up output dirs and save class data
         output_folder = create_output_folders(ROOT_DIR, folder_path, class_data)
         # Prepare the class data based on the label type
         classes = None
+        #print(class_data)
         if label_type == 'rgb':
+            mode = 'rgb'
             # Convert RGB strings back to tuples
             classes = [ast.literal_eval(row['RGB']) for row in class_data if row['RGB']]
-            mode = 'rgb'
+            # Adding because confusion matrix calculations assumes void class label
+            if (0,0,0) not in classes: classes.insert(0,(0,0,0)) 
         elif label_type == 'grayscale':
+            mode = 'grayscale'
             # Use grayscale values directly
             classes = [row['Grayscale'] for row in class_data if row['Grayscale']]
-            mode = 'grayscale'
+            # Adding because confusion matrix calculations assumes void class label
+            # And yes I do hate myself for this logic dyw
+            if 0 not in classes: classes.insert(0,0) 
+        # Set up class names 
+        class_names = None
+        if len(class_data) > 1 and class_data[0]['Class Name'] != '':
+            class_names = [row['Class Name'] for row in class_data if row['Class Name']]
+            # Removing void classes in a quite heinous way, but slightly less heinous than earlier attempts
+            if 'unlabeled' in class_names: class_names.remove('unlabeled') 
+            if 'void' in class_names: class_names.remove('void')
         # Initialize the evaluator with the folder path and class data
         evaluator = SemanticSegmentationEvaluator(directory=folder_path, classes=classes, class_names=class_names, mode=mode)
 
@@ -351,15 +372,14 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         with open(os.path.join(output_folder,'metrics','metrics.json'), 'w') as json_file:
             json.dump(results, json_file, indent=4)
         # Return tabs, display style, and metrics table+conf mat in a side by side format
-        return tabs, {'display': 'block'}, [metrics_table, confmat_fig]  
-    
+        return {'display': 'block'}, tabs, {'display': 'block'}, [metrics_table, confmat_fig]  
 
     elif n_clicks > 0 and folder_path is None:
         # Return an empty figure if no button has been clicked
         # Cue pussycat dolls
-        return [], {'display': 'none'}, None
+        return {'display': 'none'}, [], {'display': 'none'}, None
 
-    return [], {'display': 'none'}, None
+    return {'display': 'none'}, [], {'display': 'none'}, None
 
 #------------------------------
 # Run app

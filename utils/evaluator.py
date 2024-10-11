@@ -73,14 +73,14 @@ class SemanticSegmentationEvaluator:
             elif image.mode == 'L':  # Grayscale image
                 img_np = np.array(image)
                 self.mode = 'grayscale'
+                self.void_color = 0
                 # Get all unique grayscale values (class indices)
                 unique_classes.update(np.unique(img_np))
 
-        # Convert set to sorted list and create a dictionary for fast lookup (for RGB mode)
-        self.classes = sorted(list(unique_classes))
-        self.classes  = [(int(r), int(g), int(b)) for (r, g, b) in self.classes]
-        if self.mode == 'rgb':
-            self.class_dict = {color: idx for idx, color in enumerate(self.classes)}
+                # Convert set to sorted list and create a dictionary for fast lookup (for RGB mode)
+                self.classes = sorted(list(unique_classes))
+                self.classes  = [(int(r), int(g), int(b)) for (r, g, b) in self.classes]
+            
         print(f"Discovered classes from ground truth: {self.classes}")
 
     def _rgb_to_class(self, img_np):
@@ -104,7 +104,6 @@ class SemanticSegmentationEvaluator:
 
             # Convert every pixel to its class index
             for color, idx in self.class_dict.items():
-                #print(color, idx)
                 mask = np.all(img_np == color, axis=-1)
                 class_map[mask] = idx
 
@@ -171,7 +170,6 @@ class SemanticSegmentationEvaluator:
         
         return IoU_per_class, dice_per_class, avg_IoU, avg_dice
 
-
     def evaluate(self):
         """
         Evaluate the predictions from each model against the ground truth and compute the confusion matrix and accuracy.
@@ -184,14 +182,10 @@ class SemanticSegmentationEvaluator:
         # Step 1: Extract the unique classes from the ground truth images
         if self.classes is None or len(self.classes) < 1:
             self._extract_unique_classes_from_gt()
-            self.class_names = [f'C{x}' for x in range(len(self.classes))]
+            self.class_names = [f'C{x}' for x in range(1, len(self.classes))]
+            self.class_dict = {color: idx for idx, color in enumerate(self.classes)}
 
-        # Step 2: Add the void class to the list of classes for RGB mode
-        if self.mode == 'rgb':
-            if self.void_color not in self.classes:
-                self.classes.append(self.void_color)
-                self.class_dict[self.void_color] = len(self.classes) - 1  # Add void class to dictionary
-        print(f"Final classes including void: {self.classes}")
+        print(f"Final classes (excluding void): {self.classes}")
 
         # Step 3: Identify all prediction folders (excluding 'ground_truth')
         all_subdirs = [d for d in os.listdir(self.directory) if os.path.isdir(os.path.join(self.directory, d)) and d != 'ground_truth']
@@ -215,13 +209,13 @@ class SemanticSegmentationEvaluator:
                 pred_class, gt_class = self._load_images(filename, filename, pred_dir)
                 all_preds.append(pred_class.flatten())
                 all_gts.append(gt_class.flatten())
-
+                
             # Flatten all predictions and ground truths for confusion matrix calculation
             all_preds = np.concatenate(all_preds)
             all_gts = np.concatenate(all_gts)
 
             # Compute the confusion matrix and accuracy for the current prediction folder
-            conf_matrix = confusion_matrix(all_gts, all_preds, labels=range(len(self.classes)))
+            conf_matrix = confusion_matrix(all_gts, all_preds, labels=range(1, len(self.classes))) # Ignore void values
             #print(conf_matrix)
             accuracy = accuracy_score(all_gts, all_preds)
 
