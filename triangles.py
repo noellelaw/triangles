@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.io as pio
+from plotly.subplots import make_subplots
 import io
 import os
 import ast
@@ -27,6 +28,62 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Dash(__name__, external_stylesheets=['/assets/style.css'], title="triangles")
 # Initialize an empty DataFrame to store the classes and category IDs
 df = pd.DataFrame(columns=["RGB", "Grayscale", "Class Name", "Category Name", "Category ID"])
+
+#-----------------------------
+# Create a lineplot figure for the traingles subplots
+#-----------------------------
+def create_triangles_figure(category_dict, num_categories, model_name, model_data): 
+
+    # Sum each column (total predicted for each class)
+    confusion_matrix = np.array(model_data['confusion_matrix'])
+    col_sums = confusion_matrix.sum(axis=0, keepdims=True)
+    # Normalize confusion matrix
+    normalized_confusion_matrix = np.divide(confusion_matrix, col_sums, where=col_sums!=0)
+    normalized_confusion_matrix = np.nan_to_num(normalized_confusion_matrix)  # Replace NaNs with 0 if any  
+    # Kinda very ugly but it has been a bad day so we will forgive for now 
+    category_seperated_confusion_matrix = []
+    category_seperated_class_names = []
+    category_names = []
+    for i, class_name in enumerate(category_dict.keys()):
+        idx = category_dict[class_name][1] - 1
+        if len(category_seperated_confusion_matrix) <= idx:
+            category_seperated_confusion_matrix.append([normalized_confusion_matrix[i]])
+            category_seperated_class_names.append([class_name])
+        else:
+            category_seperated_confusion_matrix[idx].append(normalized_confusion_matrix[i])
+            category_seperated_class_names[idx].append(class_name)
+
+        if category_dict[class_name][0] not in category_names:
+            category_names.append(category_dict[class_name][0])
+
+    # Create subplot figure with appropriate rows and columns
+    rows, cols = num_categories, 1
+    triangles_fig = make_subplots(rows=rows, cols=cols, subplot_titles=category_names)
+    print(category_seperated_class_names)
+    for idx, category in enumerate(category_names):
+        row = idx + 1
+
+        # Add plot for each category only plotting classes in that category 
+        for class_idx, class_confusion_matrix_values in enumerate(category_seperated_confusion_matrix[idx]):
+            triangles_fig.add_trace(
+                go.Scatter(
+                    x=model_data['class_names'],
+                    y=class_confusion_matrix_values,
+                    mode='markers+lines',
+                    name=category_seperated_class_names[idx][class_idx],
+                ),
+                row=row, col=1
+            )
+
+    triangles_fig.update_layout(
+        title_text="Triangles",
+        coloraxis={'colorscale': 'Blues'},
+        showlegend=True,
+        height=200 * rows,
+    )
+
+    return dcc.Graph(figure=triangles_fig, style={'width': '100%'})
+
 
 #-----------------------------
 # Create a heatmap figure for the confusion matrix
@@ -210,7 +267,11 @@ app.layout = [
             html.Div(
                 id='side-by-side-container', 
                 style={'display': 'flex', 'justifyContent': 'space-between'}  # Container for side-by-side layout
-            )
+            ),
+            html.Div(
+                id='triangles-container', 
+                style={'display': 'flex', 'justifyContent': 'space-between'}  # Container for triangles?s
+            ),
         ]
     )
 ]
@@ -321,7 +382,8 @@ def update_table(
         Output('metrics-title', 'style'),
         Output('model-tabs', 'children'),
         Output('model-tabs', 'style'),
-        Output('side-by-side-container', 'children')
+        Output('side-by-side-container', 'children'),
+        Output('triangles-container', 'children')
     ],
     Input('run-evaluator', 'n_clicks'),
     State('folder_path', 'children'),
@@ -335,28 +397,34 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         # Set up output dirs and save class data
         output_folder = create_output_folders(ROOT_DIR, folder_path, class_data)
         # Prepare the class data based on the label type
-        classes = None
+        classes, categories = None, None
         #print(class_data)
         if label_type == 'rgb':
             mode = 'rgb'
             # Convert RGB strings back to tuples
             classes = [ast.literal_eval(row['RGB']) for row in class_data if row['RGB']]
+            categories = [row['Category ID'] for row in class_data if row['Category ID']]
             # Adding because confusion matrix calculations assumes void class label
             if (0,0,0) not in classes: classes.insert(0,(0,0,0)) 
         elif label_type == 'grayscale':
             mode = 'grayscale'
             # Use grayscale values directly
             classes = [row['Grayscale'] for row in class_data if row['Grayscale']]
+            categories = [row['Category ID'] for row in class_data if row['Category ID']]
             # Adding because confusion matrix calculations assumes void class label
             # And yes I do hate myself for this logic dyw
             if 0 not in classes: classes.insert(0,0) 
-        # Set up class names 
-        class_names = None
+        # Set up class names and category dict
+        class_names, category_dict = None, {}
         if len(class_data) > 1 and class_data[0]['Class Name'] != '':
             class_names = [row['Class Name'] for row in class_data if row['Class Name']]
+            for n, name in enumerate(class_names): 
+                category_dict[name] = [class_data[n]['Category Name'], class_data[n]['Category ID']]
             # Removing void classes in a quite heinous way, but slightly less heinous than earlier attempts
             if 'unlabeled' in class_names: class_names.remove('unlabeled') 
             if 'void' in class_names: class_names.remove('void')
+            if 'unlabeled' in category_dict.keys(): del category_dict['unlabeled']
+            if 'void' in category_dict.keys(): del category_dict['void']
         # Initialize the evaluator with the folder path and class data
         evaluator = SemanticSegmentationEvaluator(directory=folder_path, classes=classes, class_names=class_names, mode=mode)
 
@@ -364,22 +432,27 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         results = evaluator.evaluate()
 
         # For each model in the returned dictionary, generate a metrics table and confusion matrix
+        triangles_fig = None
         for model_name, model_data in results.items():
             metrics_table, confmat_fig = create_confusion_matrix_figure_and_metrics(model_name, model_data)
+            print(categories)
+            if categories:
+                num_categories = len(np.unique(categories))
+                triangles_fig = create_triangles_figure(category_dict, num_categories, model_name, model_data)
             tabs.append(dcc.Tab(label=model_name, value=model_name))
         # Save plotly figure and data
         pio.write_html(confmat_fig, file=os.path.join(output_folder,'visualizations','confmat.html'))
         with open(os.path.join(output_folder,'metrics','metrics.json'), 'w') as json_file:
             json.dump(results, json_file, indent=4)
         # Return tabs, display style, and metrics table+conf mat in a side by side format
-        return {'display': 'block'}, tabs, {'display': 'block'}, [metrics_table, confmat_fig]  
+        return {'display': 'block'}, tabs, {'display': 'block'}, [metrics_table, confmat_fig], [triangles_fig]  
 
     elif n_clicks > 0 and folder_path is None:
         # Return an empty figure if no button has been clicked
         # Cue pussycat dolls
-        return {'display': 'none'}, [], {'display': 'none'}, None
+        return {'display': 'none'}, [], {'display': 'none'}, None, None
 
-    return {'display': 'none'}, [], {'display': 'none'}, None
+    return {'display': 'none'}, [], {'display': 'none'}, None, None
 
 #------------------------------
 # Run app
