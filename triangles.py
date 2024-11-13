@@ -17,7 +17,7 @@ from zipfile import ZipFile
 import json 
 
 from utils.evaluator import SemanticSegmentationEvaluator
-from utils.general import create_output_folders
+from utils.general import create_output_folders, generate_rgb_colors
 #TODO: Allow column to be editted / deleted from table
 #    : please allow experiment name to save csv to to prevent overwriting of classes when ur being lazy and running wo jfc noelle
 #-----------------------------
@@ -32,14 +32,16 @@ df = pd.DataFrame(columns=["RGB", "Grayscale", "Class Name", "Category Name", "C
 #-----------------------------
 # Create a lineplot figure for the traingles subplots
 #-----------------------------
-def create_triangles_figure(category_dict, num_categories, model_name, model_data): 
+def create_triangles_figure(category_dict, num_categories, model_name, model_data, rgb_colors): 
 
     # Sum each column (total predicted for each class)
     confusion_matrix = np.array(model_data['confusion_matrix'])
     col_sums = confusion_matrix.sum(axis=0, keepdims=True)
+    print(col_sums)
     # Normalize confusion matrix
     normalized_confusion_matrix = np.divide(confusion_matrix, col_sums, where=col_sums!=0)
-    normalized_confusion_matrix = np.nan_to_num(normalized_confusion_matrix)  # Replace NaNs with 0 if any  
+    normalized_confusion_matrix = np.nan_to_num(normalized_confusion_matrix)  # Replace NaNs with 0 if any
+    normalized_confusion_matrix = np.clip(normalized_confusion_matrix, 0, 1)  # Clip values between 0 and 1  
     # Kinda very ugly but it has been a bad day so we will forgive for now 
     category_seperated_confusion_matrix = []
     category_seperated_class_names = []
@@ -60,20 +62,28 @@ def create_triangles_figure(category_dict, num_categories, model_name, model_dat
     rows, cols = num_categories, 1
     triangles_fig = make_subplots(rows=rows, cols=cols, subplot_titles=category_names)
     print(category_seperated_class_names)
+    # Cant think of a better name atm 
+    # But aims to keep track of classes for label color purposes
+    class_tracker = 0
     for idx, category in enumerate(category_names):
         row = idx + 1
 
         # Add plot for each category only plotting classes in that category 
         for class_idx, class_confusion_matrix_values in enumerate(category_seperated_confusion_matrix[idx]):
+
+            color = rgb_colors[class_tracker]
             triangles_fig.add_trace(
                 go.Scatter(
                     x=model_data['class_names'],
                     y=class_confusion_matrix_values,
                     mode='markers+lines',
                     name=category_seperated_class_names[idx][class_idx],
+                    marker=dict(color=color),
+                    line=dict(color=color),
                 ),
                 row=row, col=1
             )
+            class_tracker+=1
 
     triangles_fig.update_layout(
         title_text="Triangles",
@@ -81,6 +91,8 @@ def create_triangles_figure(category_dict, num_categories, model_name, model_dat
         showlegend=True,
         height=200 * rows,
     )
+    # Set the y-axis range for each subplot to be between 0 and 1
+    triangles_fig.update_yaxes(range=[0, 1])
 
     return dcc.Graph(figure=triangles_fig, style={'width': '100%'})
 
@@ -397,13 +409,14 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
         # Set up output dirs and save class data
         output_folder = create_output_folders(ROOT_DIR, folder_path, class_data)
         # Prepare the class data based on the label type
-        classes, categories = None, None
+        classes, categories, rgb_colors = None, None, None
         #print(class_data)
         if label_type == 'rgb':
             mode = 'rgb'
             # Convert RGB strings back to tuples
             classes = [ast.literal_eval(row['RGB']) for row in class_data if row['RGB']]
             categories = [row['Category ID'] for row in class_data if row['Category ID']]
+            rgb_colors = [f'rgb{row['RGB']}' for row in class_data if row['RGB']]
             # Adding because confusion matrix calculations assumes void class label
             if (0,0,0) not in classes: classes.insert(0,(0,0,0)) 
         elif label_type == 'grayscale':
@@ -411,6 +424,7 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
             # Use grayscale values directly
             classes = [row['Grayscale'] for row in class_data if row['Grayscale']]
             categories = [row['Category ID'] for row in class_data if row['Category ID']]
+            rgb_colors = generate_rgb_colors(len(classes)) 
             # Adding because confusion matrix calculations assumes void class label
             # And yes I do hate myself for this logic dyw
             if 0 not in classes: classes.insert(0,0) 
@@ -421,8 +435,12 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
             for n, name in enumerate(class_names): 
                 category_dict[name] = [class_data[n]['Category Name'], class_data[n]['Category ID']]
             # Removing void classes in a quite heinous way, but slightly less heinous than earlier attempts
-            if 'unlabeled' in class_names: class_names.remove('unlabeled') 
-            if 'void' in class_names: class_names.remove('void')
+            if 'unlabeled' in class_names: 
+                rgb_colors.pop(class_names.index('unlabeled'))
+                class_names.remove('unlabeled') 
+            if 'void' in class_names: 
+                rgb_colors.pop(class_names.index('void'))
+                class_names.remove('void')
             if 'unlabeled' in category_dict.keys(): del category_dict['unlabeled']
             if 'void' in category_dict.keys(): del category_dict['void']
         # Initialize the evaluator with the folder path and class data
@@ -438,7 +456,7 @@ def run_evaluator(n_clicks, folder_path, class_data, label_type):
             print(categories)
             if categories:
                 num_categories = len(np.unique(categories))
-                triangles_fig = create_triangles_figure(category_dict, num_categories, model_name, model_data)
+                triangles_fig = create_triangles_figure(category_dict, num_categories, model_name, model_data, rgb_colors)
             tabs.append(dcc.Tab(label=model_name, value=model_name))
         # Save plotly figure and data
         pio.write_html(confmat_fig, file=os.path.join(output_folder,'visualizations','confmat.html'))

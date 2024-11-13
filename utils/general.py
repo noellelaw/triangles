@@ -1,5 +1,23 @@
 import os
 import pandas as pd
+import colorsys
+
+def generate_rgb_colors(num_colors):
+    """
+    Generate RGB colors for labels if grey scale images are provided 
+    """
+    colors = []
+    for i in range(num_colors):
+        # Use the hue value (HSL) to create distinct colors, evenly spaced
+        hue = i / num_colors
+        lightness = 0.5
+        saturation = 0.8
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        
+        # Convert RGB from 0-1 range to 0-255 and format as an RGB string
+        rgb = tuple(int(c * 255) for c in rgb)
+        colors.append(f"rgb{rgb}")
+    return colors
 
 
 def check_and_make_dirs(folder_path):
